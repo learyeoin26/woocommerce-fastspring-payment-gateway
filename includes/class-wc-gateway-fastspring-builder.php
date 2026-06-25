@@ -185,7 +185,7 @@ class WC_Gateway_FastSpring_Builder
      *
      * @return string
      */
-    public static function get_image($id, $size = 'shop_thumbnail', $attr = array(), $placeholder = true)
+    public static function get_image($id, $size = 'woocommerce_thumbnail', $attr = array(), $placeholder = true)
     {
         $data = wp_get_attachment_image_src($id, $size);
 
