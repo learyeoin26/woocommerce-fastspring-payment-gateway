@@ -73,17 +73,23 @@ class WC_Gateway_FastSpring_Handler
 
         $url = 'https://api.fastspring.com/orders/' . $id;
 
-        $context = stream_context_create(array(
-            'http' => array(
-              'user_agent' => 'Mozilla/5.0', // Not important what it is but must be set
-              'header' => "Authorization: Basic " . base64_encode(
-                  self::get_setting('api_username') . ':' . self::get_setting('api_password')
-              ),
-            )));
+        $response = wp_remote_get($url, array(
+            'timeout' => 15,
+            'headers' => array(
+                'Authorization' => 'Basic ' . base64_encode(
+                    self::get_setting('api_username') . ':' . self::get_setting('api_password')
+                ),
+            ),
+        ));
 
-        $data = @json_decode(file_get_contents($url, false, $context));
+        if (is_wp_error($response)) {
+            $this->log(sprintf('API order %s lookup failed: %s', $id, $response->get_error_message()));
+            return 'pending';
+        }
 
-        if ($data && $data->completed === true) {
+        $data = json_decode(wp_remote_retrieve_body($response));
+
+        if ($data && isset($data->completed) && $data->completed === true) {
             $this->log(sprintf('API order %s completion checked', $id));
             return 'completed';
         }
@@ -128,12 +134,17 @@ class WC_Gateway_FastSpring_Handler
 
             if ($status === 'completed' && $order->payment_complete($payload->reference)) {
                 $this->log(sprintf('Marking order ID %s as completed', $order->get_id()));
-                $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce'), $order->get_id()));
+                $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce-gateway-fastspring'), $order->get_id()));
             }
             // We could have a race condition where FS already called webhook so lets not assume its pending
             elseif ($order_status != 'completed') {
-                $order->update_status('pending', __('Order pending payment approval.', 'woocommerce'));
+                $order->update_status('pending', __('Order pending payment approval.', 'woocommerce-gateway-fastspring'));
             }
+
+            // payment_complete()/update_status() save the order, but if neither
+            // branch ran (e.g. already completed via webhook) the transaction id
+            // and meta set above would be lost - especially under HPOS. Persist them.
+            $order->save();
 
             $data = ["redirect_url" => WC_Gateway_FastSpring_Handler::get_return_url($order), 'order_id' => $order_id];
 
@@ -287,7 +298,7 @@ class WC_Gateway_FastSpring_Handler
         // Only mark complete if not already - webhook can hit multiple times
         if ($order->get_status() !== 'completed' && $order->payment_complete($payload->reference)) {
             $this->log(sprintf('Marking order ID %s as complete', $order->get_id()));
-            $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce'), $order->get_id()));
+            $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce-gateway-fastspring'), $order->get_id()));
         } else {
             $this->log(sprintf('Failed marking order ID %s as complete', $order->get_id()));
         }
@@ -326,7 +337,11 @@ class WC_Gateway_FastSpring_Handler
     {
         $order = $this->find_order_by_fastspring_tag($payload);
         $this->log(sprintf('Marking subscription order ID %s as (re)activated', $order->get_id()));
-        $order->update_status('active');
+        // NOTE: 'active' is a WooCommerce Subscriptions *subscription* status, not a
+        // valid *order* status, so the original update_status('active') silently
+        // failed. 'completed' is the closest valid order status for a reactivation,
+        // but confirm this matches your intended business logic before shipping.
+        $order->update_status('completed');
     }
 
     /**
@@ -358,7 +373,7 @@ class WC_Gateway_FastSpring_Handler
         $headers = getallheaders();
         $hash = base64_encode(hash_hmac('sha256', file_get_contents('php://input'), $secret, true));
 
-        $sig = $_SERVER['HTTP_X_FS_SIGNATURE'];
+        $sig = isset($_SERVER['HTTP_X_FS_SIGNATURE']) ? $_SERVER['HTTP_X_FS_SIGNATURE'] : '';
 
         if (!$sig) {
             $this->log('No secret provided by FastSpring webhook');
