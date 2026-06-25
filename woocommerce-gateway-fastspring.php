@@ -4,11 +4,13 @@
  * Description: Accept credit card, PayPal, Amazon Pay and other payments on your store using FastSpring.
  * Author: Enradia
  * Author URI: https://enradia.com/
- * Version: 1.2.5
- * Requires at least: 4.4
- * Tested up to: 4.9.6
- * WC requires at least: 3.0
- * WC tested up to: 3.4
+ * Version: 1.3.0
+ * Requires at least: 6.4
+ * Tested up to: 6.4
+ * Requires PHP: 7.4
+ * Requires Plugins: woocommerce
+ * WC requires at least: 8.0
+ * WC tested up to: 8.4
  * Text Domain: woocommerce-gateway-fastspring
  *
  */
@@ -21,12 +23,37 @@ if (!defined('ABSPATH')) {
 /**
  * Required minimums and constants
  */
-define('WC_FASTSPRING_VERSION', '1.2.2');
-define('WC_FASTSPRING_SCRIPT', 'https://d1f8f9xcsvx3ha.cloudfront.net/sbl/0.8.3/fastspring-builder.min.js');
-define('WC_FASTSPRING_MIN_PHP_VER', '5.6.0');
-define('WC_FASTSPRING_MIN_WC_VER', '3.0.0');
+define('WC_FASTSPRING_VERSION', '1.3.0');
+define('WC_FASTSPRING_SCRIPT', 'https://sbl.onfastspring.com/sbl/1.0.7/fastspring-builder.min.js');
+define('WC_FASTSPRING_MIN_PHP_VER', '7.4');
+define('WC_FASTSPRING_MIN_WC_VER', '8.0.0');
 define('WC_FASTSPRING_MAIN_FILE', __FILE__);
 define('WC_FASTSPRING_PLUGIN_URL', plugins_url('', __FILE__));
+
+/**
+ * Declare compatibility with WooCommerce features.
+ *
+ * - custom_order_tables (HPOS): the plugin uses WC CRUD ($order->get_meta(),
+ *   update_meta_data(), set_transaction_id(), etc.) so it is HPOS-safe.
+ * - cart_checkout_blocks: set to FALSE for now. The gateway only implements the
+ *   classic payment_fields() flow and has no Blocks integration yet, so it will
+ *   not render in the block-based checkout. Flip this to true once a
+ *   Blocks payment method type is registered.
+ */
+add_action('before_woocommerce_init', function () {
+    if (class_exists('\Automattic\WooCommerce\Utilities\FeaturesUtil')) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+            'custom_order_tables',
+            WC_FASTSPRING_MAIN_FILE,
+            true
+        );
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+            'cart_checkout_blocks',
+            WC_FASTSPRING_MAIN_FILE,
+            false
+        );
+    }
+});
 
 if (!class_exists('WC_FastSpring')):
 
@@ -72,12 +99,12 @@ if (!class_exists('WC_FastSpring')):
       }
 
       /**
-       * Private unserialize method to prevent unserializing of the *Singleton*
-       * instance.
+       * Unserialize method to prevent unserializing of the *Singleton*
+       * instance. Must be public for PHP 8.0+ compatibility.
        *
        * @return void
        */
-      private function __wakeup()
+      public function __wakeup()
       {
       }
 
@@ -372,14 +399,14 @@ if (!class_exists('WC_FastSpring')):
       public static function log($message)
       {
 
-          // Static function so we need to get options another way
-          $settings = self::get_setting('woocommerce_fastspring_settings', array());
+          // Logging is enabled via the plugin setting or when WP_DEBUG is on.
+          $logging_enabled = self::get_setting('logging');
 
-          if ($settings['logging'] || defined('WP_DEBUG') && WP_DEBUG) {
+          if ($logging_enabled || (defined('WP_DEBUG') && WP_DEBUG)) {
               if (empty(self::$log)) {
-                  self::$log = new WC_Logger();
+                  self::$log = wc_get_logger();
               }
-              self::$log->add('woocommerce-gateway-fastspring', $message);
+              self::$log->log('info', $message, array('source' => 'woocommerce-gateway-fastspring'));
           }
       }
   }
